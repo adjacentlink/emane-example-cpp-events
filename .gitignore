@@ -1,0 +1,23 @@
+# configure output
+**/Makefile
+config.log
+config.status
+libtool
+autom4te.cache
+
+# protocol buffers output
+*.pb.cc
+*.pb.h
+
+# object files/dependencies
+*.la
+*.lo
+*.o
+**/.deps
+**/.libs
+
+# dist
+emane-example-cpp-events-*.tar.gz
+
+# applications
+src/emane-example-cpp-events
