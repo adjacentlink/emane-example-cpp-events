@@ -30,15 +30,19 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-// Description: 
-//  example application sending an EMANE pathloss event to
-//  an ipv4 or ipv6 event service channel
+// Description:
+//
+// example application sending and receiving an EMANE pathloss event
+//  using an ipv4 or ipv6 event service channel
 
 #include <iostream>
+#include <thread>
 #include <netdb.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <uuid.h>
+#include <sys/eventfd.h>
+#include <signal.h>
 
 #include "event.pb.h"
 #include "pathlossevent.pb.h"
@@ -51,6 +55,144 @@ namespace
   const char * MULTICAST_DEVICE{"lo"};
   const bool MULTICAST_LOOP_ENABLE{true};
   const int MULTICAST_LOOP_TTL{32};
+
+  // eventfd object used to signal thread to exit
+  int iSignalEvent{};
+
+  void sighandler(int)
+  {
+    eventfd_write(iSignalEvent,1);
+  }
+}
+
+// thread procedure used to receive events and print info
+void eventProcessor(int iSocket,int iSignal)
+{
+  char buf[65535];
+  fd_set rfds;
+  int iMaxFd{std::max(iSocket,iSignal)};
+  while(1)
+    {
+      FD_ZERO(&rfds);
+      FD_SET(iSocket,&rfds);
+      FD_SET(iSignal,&rfds);
+
+      if(select(iMaxFd+1, &rfds,nullptr,nullptr,nullptr) > 0)
+        {
+          if(FD_ISSET(iSocket,&rfds))
+            {
+              ssize_t len = recv(iSocket,buf,sizeof(buf),0);
+
+              // verify that length is large enough to hold the length prefix
+              //  framing
+              if(len >= 2)
+                {
+                  // use to avoid dereferencing type-punned pointer will 
+                  //  break strict-aliasing rules warning
+                  std::uint16_t * pu16LengthPrefixFraming{reinterpret_cast<std::uint16_t *>(buf)};
+          
+                  std::uint16_t u16MessageSize{ntohs(*pu16LengthPrefixFraming)};
+
+                  // properly framed message. This might seem unnecessary for
+                  //  a datagram but it allows a consistent format if the
+                  //  transport is switched to a stream in the future.
+                  if(u16MessageSize == len - 2)
+                    {
+                      EMANEMessage::Event msg{};
+              
+                      // de-serialize the event message
+                      if(msg.ParseFromArray(&buf[2],u16MessageSize))
+                        {
+                          // a single event message may include multple event payloads
+                          using RepeatedPtrFieldSerilaization = 
+                            google::protobuf::RepeatedPtrField<EMANEMessage::Event::Data::Serialization>;
+                  
+                          for(const auto & repeatedSerialization : 
+                                RepeatedPtrFieldSerilaization(msg.data().serializations()))
+                            {
+                              // determine which event type to handle using the event id
+                              switch(repeatedSerialization.eventid())
+                                {
+                                case 100:
+                                  std::cout<<"received location event for nem "
+                                           <<repeatedSerialization.nemid()
+                                           <<std::endl
+                                           <<" use EMANEMessage::LocationEvent to decode..."
+                                           <<std::endl;
+                                  break;
+
+                                case 101:
+                                  {
+                                    // full example parsing a pathloss event
+                                    std::cout<<"received pathloss event for nem "
+                                             <<repeatedSerialization.nemid()
+                                             <<std::endl;
+
+                                    EMANEMessage::PathlossEvent event{};
+                          
+                                    if(event.ParseFromString(repeatedSerialization.data()))
+                                      {
+                                        using RepeatedPtrFieldPathloss = 
+                                          google::protobuf::RepeatedPtrField<EMANEMessage::PathlossEvent::Pathloss>;
+
+                                        for(const auto & repeatedPathloss : RepeatedPtrFieldPathloss(event.pathlosses()))
+                                          {
+                                            std::cout<<" nem "
+                                                     <<repeatedPathloss.nemid()
+                                                     <<" forward pathloss dB "
+                                                     <<repeatedPathloss.forwardpathlossdb()
+                                                     <<" reverse pathloss dB "
+                                                     <<repeatedPathloss.reversepathlossdb()
+                                                     <<std::endl;
+                                          }
+                                      }
+                                  }
+                                  break;
+
+                                case 102:
+                                  std::cout<<"received antenna profile event for nem "
+                                           <<repeatedSerialization.nemid()
+                                           <<std::endl
+                                           <<" use EMANEMessage::AntennaProfileEvent to decode..."
+                                           <<std::endl;
+                                  break;
+                                  
+                                case 103:
+                                  std::cout<<"received comm effect event for nem "
+                                           <<repeatedSerialization.nemid()
+                                           <<std::endl
+                                           <<" use EMANEMessage::CommEffectEvent to decode..."
+                                           <<std::endl;
+                                  break;
+                                default:
+                                  std::cout<<"received unknown event "
+                                           <<repeatedSerialization.eventid()
+                                           <<" for nem "
+                                           <<repeatedSerialization.nemid()
+                                           <<std::endl;
+                                }
+                            }
+                        }
+                      else
+                        {
+                          std::cerr<<"received a malformed event message"<<std::endl;
+                        }
+              
+                    }
+                  else
+                    {
+                      std::cerr<<"received an invalid length prefix framed message"<<std::endl;
+                    }
+                }
+            }
+
+          // eventfd object
+          if(FD_ISSET(iSignal,&rfds))
+            {
+              return;
+            }
+        }
+    }
 }
 
 int main(int, char *[])
@@ -100,7 +242,7 @@ int main(int, char *[])
                         (void*)&u8Option,
                         sizeof(u8Option)) < 0)
             {
-              perror("setsockopt IP_MULTICAST_TTL:");
+              perror("setsockopt IP_MULTICAST_TTL");
               return EXIT_FAILURE;
 
             }
@@ -110,7 +252,7 @@ int main(int, char *[])
         {
           u8Option = 1;
 
-          // Set the Multicast Loopback
+          // set the multicast loopback
           if(setsockopt(iSock,IPPROTO_IP,IP_MULTICAST_LOOP,
                         &u8Option,
                         sizeof(u8Option)) < 0)
@@ -120,20 +262,29 @@ int main(int, char *[])
             }
         }
 
+      // multicast group info used for join
+      ip_mreq mreq;
+
+      memset(&mreq,0,sizeof(mreq));
+
+      memcpy(&mreq.imr_multiaddr,
+             &reinterpret_cast<sockaddr_in*>(pMulticastAddrInfo->ai_addr)->sin_addr,
+             sizeof(mreq.imr_multiaddr)); 
+
       if(MULTICAST_DEVICE)
         {
           ifreq ifr;
           memset(&ifr,0,sizeof(ifr));
           strncpy(ifr.ifr_name,MULTICAST_DEVICE,IFNAMSIZ);
 
-          // Get the IP Address
+          // get the ip address
           if(ioctl(iSock, SIOCGIFADDR, &ifr) < 0)
             {
-              perror("ioctl SIOCGIFADDR:");
+              perror("ioctl SIOCGIFADDR");
               return EXIT_FAILURE;
             }
 
-          // set the multicast Interace
+          // set the multicast interface
           if(setsockopt(iSock,
                         IPPROTO_IP,
                         IP_MULTICAST_IF,
@@ -143,9 +294,25 @@ int main(int, char *[])
               perror("setsockopt IP_MULTICAST_IF");
               return EXIT_FAILURE;
             }
+
+          mreq.imr_interface.s_addr = reinterpret_cast<sockaddr_in*>(&ifr.ifr_addr)->sin_addr.s_addr;
+        }
+      else
+        {
+          mreq.imr_interface.s_addr = INADDR_ANY;
         }
 
+      if(setsockopt(iSock,
+                    IPPROTO_IP,
+                    IP_ADD_MEMBERSHIP,
+                    reinterpret_cast<void*>(&mreq),
+                    sizeof(mreq)) < 0)
+        {
+          perror("setsockopt IP_ADD_MEMBERSHIP");
+          return EXIT_FAILURE;
+        }
     }
+
   else if(pMulticastAddrInfo->ai_family == AF_INET6)
     {
       int iOption{};
@@ -160,7 +327,7 @@ int main(int, char *[])
                         &iOption,
                         sizeof(iOption)) < 0)
             {
-              perror("setsockopt IPV6_MULTICAST_HOPS:");
+              perror("setsockopt IPV6_MULTICAST_HOPS");
               return EXIT_FAILURE;
             }
         }
@@ -175,10 +342,20 @@ int main(int, char *[])
                         &iOption,
                         sizeof(iOption)) < 0)
             {
-              perror("setsockopt IPV6_MULTICAST_LOOP:");
+              perror("setsockopt IPV6_MULTICAST_LOOP");
               return EXIT_FAILURE;
             }
         }
+
+      ipv6_mreq mreq6;
+
+      memset(&mreq6,0,sizeof(mreq6));
+
+      memcpy(&mreq6.ipv6mr_multiaddr,
+             &reinterpret_cast<sockaddr_in6 *>(pMulticastAddrInfo->ai_addr)->sin6_addr,
+             sizeof(mreq6.ipv6mr_multiaddr));
+
+      mreq6.ipv6mr_interface = 0;
 
       if(MULTICAST_DEVICE)
         {
@@ -190,9 +367,21 @@ int main(int, char *[])
                         &iIndex,
                         sizeof(iIndex)) < 0)
             {
-              perror("setsockopt IPV6_MULTICAST_IF:");
+              perror("setsockopt IPV6_MULTICAST_IF");
               return EXIT_FAILURE;
             }
+
+          mreq6.ipv6mr_interface = iIndex;
+        }
+      
+      if(setsockopt(iSock,
+                    IPPROTO_IPV6,
+                    IPV6_ADD_MEMBERSHIP,
+                    reinterpret_cast<void *>(&mreq6),
+                    sizeof(mreq6)) < 0)
+        {
+          perror("setsockopt IPV6_ADD_MEMBERSHIP");
+          return EXIT_FAILURE; 
         }
     }
   else
@@ -200,6 +389,44 @@ int main(int, char *[])
       std::cerr<<"unknown address family"<<std::endl;
       return EXIT_FAILURE;
     }
+
+  int iOption{1};
+      
+  if(setsockopt(iSock,
+                SOL_SOCKET,
+                SO_REUSEADDR,
+                reinterpret_cast<void*>(&iOption),
+                sizeof(iOption)) < 0)
+    {
+      perror("setsockopt  SO_REUSEADDR");
+      return EXIT_FAILURE;
+    }
+
+  if(bind(iSock,pMulticastAddrInfo->ai_addr,pMulticastAddrInfo->ai_addrlen) < 0)
+    {
+      perror("bind");
+      return EXIT_FAILURE; 
+    }
+
+  if((iSignalEvent = eventfd(0,0)) == -1)
+    {
+      perror("eventfd");
+      return EXIT_FAILURE; 
+    }
+
+  // example terminates using 'Ctl-c' or 'Ctl-\'
+  struct sigaction action;
+      
+  memset(&action,0,sizeof(action));
+      
+  action.sa_handler = sighandler;
+      
+  sigaction(SIGINT,&action,nullptr);
+
+  sigaction(SIGQUIT,&action,nullptr);
+
+  // start the receive thread
+  std::thread t1(eventProcessor,iSock,iSignalEvent);
 
   // all emane event publishers need a UUID
   uuid_t uuid;
@@ -290,6 +517,11 @@ int main(int, char *[])
       perror("sendmsg");
       return EXIT_FAILURE;
     }
+
+  // wait for the receive thread to complete
+  t1.join();
+  
+  std::cout<<"bye"<<std::endl;
 
   return EXIT_SUCCESS;
 }

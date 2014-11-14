@@ -26,7 +26,8 @@ emane_example_cpp_events_CXXFLAGS =  \
 
 emane_example_cpp_events_LDFLAGS=    \
  $(protobuf_LIBS)                    \
- $(libuuid_LIBS)                     
+ $(libuuid_LIBS)                     \
+ -lpthread
 
 emane_example_cpp_events_SOURCES =   \
  antennaprofileevent.pb.cc           \
