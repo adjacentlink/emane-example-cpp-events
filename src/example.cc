@@ -87,10 +87,10 @@ void eventProcessor(int iSocket,int iSignal)
               //  framing
               if(len >= 2)
                 {
-                  // use to avoid dereferencing type-punned pointer will 
+                  // use to avoid dereferencing type-punned pointer will
                   //  break strict-aliasing rules warning
                   std::uint16_t * pu16LengthPrefixFraming{reinterpret_cast<std::uint16_t *>(buf)};
-          
+
                   std::uint16_t u16MessageSize{ntohs(*pu16LengthPrefixFraming)};
 
                   // properly framed message. This might seem unnecessary for
@@ -99,23 +99,19 @@ void eventProcessor(int iSocket,int iSignal)
                   if(u16MessageSize == len - 2)
                     {
                       EMANEMessage::Event msg{};
-              
+
                       // de-serialize the event message
                       if(msg.ParseFromArray(&buf[2],u16MessageSize))
                         {
                           // a single event message may include multple event payloads
-                          using RepeatedPtrFieldSerilaization = 
-                            google::protobuf::RepeatedPtrField<EMANEMessage::Event::Data::Serialization>;
-                  
-                          for(const auto & repeatedSerialization : 
-                                RepeatedPtrFieldSerilaization(msg.data().serializations()))
+                          for(const auto & serialization : msg.data().serializations())
                             {
                               // determine which event type to handle using the event id
-                              switch(repeatedSerialization.eventid())
+                              switch(serialization.eventid())
                                 {
                                 case 100:
                                   std::cout<<"received location event for nem "
-                                           <<repeatedSerialization.nemid()
+                                           <<serialization.nemid()
                                            <<std::endl
                                            <<" use EMANEMessage::LocationEvent to decode..."
                                            <<std::endl;
@@ -125,14 +121,14 @@ void eventProcessor(int iSocket,int iSignal)
                                   {
                                     // full example parsing a pathloss event
                                     std::cout<<"received pathloss event for nem "
-                                             <<repeatedSerialization.nemid()
+                                             <<serialization.nemid()
                                              <<std::endl;
 
                                     EMANEMessage::PathlossEvent event{};
-                          
-                                    if(event.ParseFromString(repeatedSerialization.data()))
+
+                                    if(event.ParseFromString(serialization.data()))
                                       {
-                                        using RepeatedPtrFieldPathloss = 
+                                        using RepeatedPtrFieldPathloss =
                                           google::protobuf::RepeatedPtrField<EMANEMessage::PathlossEvent::Pathloss>;
 
                                         for(const auto & repeatedPathloss : RepeatedPtrFieldPathloss(event.pathlosses()))
@@ -151,24 +147,24 @@ void eventProcessor(int iSocket,int iSignal)
 
                                 case 102:
                                   std::cout<<"received antenna profile event for nem "
-                                           <<repeatedSerialization.nemid()
+                                           <<serialization.nemid()
                                            <<std::endl
                                            <<" use EMANEMessage::AntennaProfileEvent to decode..."
                                            <<std::endl;
                                   break;
-                                  
+
                                 case 103:
                                   std::cout<<"received comm effect event for nem "
-                                           <<repeatedSerialization.nemid()
+                                           <<serialization.nemid()
                                            <<std::endl
                                            <<" use EMANEMessage::CommEffectEvent to decode..."
                                            <<std::endl;
                                   break;
                                 default:
                                   std::cout<<"received unknown event "
-                                           <<repeatedSerialization.eventid()
+                                           <<serialization.eventid()
                                            <<" for nem "
-                                           <<repeatedSerialization.nemid()
+                                           <<serialization.nemid()
                                            <<std::endl;
                                 }
                             }
@@ -177,7 +173,7 @@ void eventProcessor(int iSocket,int iSignal)
                         {
                           std::cerr<<"received a malformed event message"<<std::endl;
                         }
-              
+
                     }
                   else
                     {
@@ -269,7 +265,7 @@ int main(int, char *[])
 
       memcpy(&mreq.imr_multiaddr,
              &reinterpret_cast<sockaddr_in*>(pMulticastAddrInfo->ai_addr)->sin_addr,
-             sizeof(mreq.imr_multiaddr)); 
+             sizeof(mreq.imr_multiaddr));
 
       if(MULTICAST_DEVICE)
         {
@@ -373,7 +369,7 @@ int main(int, char *[])
 
           mreq6.ipv6mr_interface = iIndex;
         }
-      
+
       if(setsockopt(iSock,
                     IPPROTO_IPV6,
                     IPV6_ADD_MEMBERSHIP,
@@ -381,7 +377,7 @@ int main(int, char *[])
                     sizeof(mreq6)) < 0)
         {
           perror("setsockopt IPV6_ADD_MEMBERSHIP");
-          return EXIT_FAILURE; 
+          return EXIT_FAILURE;
         }
     }
   else
@@ -391,7 +387,7 @@ int main(int, char *[])
     }
 
   int iOption{1};
-      
+
   if(setsockopt(iSock,
                 SOL_SOCKET,
                 SO_REUSEADDR,
@@ -405,22 +401,22 @@ int main(int, char *[])
   if(bind(iSock,pMulticastAddrInfo->ai_addr,pMulticastAddrInfo->ai_addrlen) < 0)
     {
       perror("bind");
-      return EXIT_FAILURE; 
+      return EXIT_FAILURE;
     }
 
   if((iSignalEvent = eventfd(0,0)) == -1)
     {
       perror("eventfd");
-      return EXIT_FAILURE; 
+      return EXIT_FAILURE;
     }
 
   // example terminates using 'Ctl-c' or 'Ctl-\'
   struct sigaction action;
-      
+
   memset(&action,0,sizeof(action));
-      
+
   action.sa_handler = sighandler;
-      
+
   sigaction(SIGINT,&action,nullptr);
 
   sigaction(SIGQUIT,&action,nullptr);
@@ -520,7 +516,7 @@ int main(int, char *[])
 
   // wait for the receive thread to complete
   t1.join();
-  
+
   std::cout<<"bye"<<std::endl;
 
   return EXIT_SUCCESS;
