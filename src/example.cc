@@ -128,17 +128,14 @@ void eventProcessor(int iSocket,int iSignal)
 
                                     if(event.ParseFromString(serialization.data()))
                                       {
-                                        using RepeatedPtrFieldPathloss =
-                                          google::protobuf::RepeatedPtrField<EMANEMessage::PathlossEvent::Pathloss>;
-
-                                        for(const auto & repeatedPathloss : RepeatedPtrFieldPathloss(event.pathlosses()))
+                                        for(const auto & pathloss : event.pathlosses())
                                           {
                                             std::cout<<" nem "
-                                                     <<repeatedPathloss.nemid()
+                                                     <<pathloss.nemid()
                                                      <<" forward pathloss dB "
-                                                     <<repeatedPathloss.forwardpathlossdb()
+                                                     <<pathloss.forwardpathlossdb()
                                                      <<" reverse pathloss dB "
-                                                     <<repeatedPathloss.reversepathlossdb()
+                                                     <<pathloss.reversepathlossdb()
                                                      <<std::endl;
                                           }
                                       }
